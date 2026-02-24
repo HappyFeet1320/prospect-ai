@@ -1,0 +1,52 @@
+# Secrets — NE JAMAIS committer
+.env
+*.env
+
+# Données volumineuses — exclues du repo
+KboOpenData_0242_2026_01_15_Full/
+data/
+
+# Base de données locale
+*.db
+*.sqlite
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Virtual environments
+venv/
+.venv/
+env/
+.env/
+
+# Claude Code (paramètres locaux)
+.claude/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Logs
+*.log
+logs/
+
+# Cache
+.cache/
+*.cache
+
+# Playwright
+playwright/.auth/
+
+# OS
+.DS_Store
+Thumbs.db

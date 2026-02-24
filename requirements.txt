@@ -1,0 +1,48 @@
+# PROSPECT-AI — Dépendances Python
+# Python 3.11+
+
+# === Interface utilisateur ===
+streamlit>=1.40.0
+streamlit-folium>=0.22.0
+folium>=0.17.0
+
+# === LLM Providers ===
+groq>=0.13.0           # Provider actif (llama-3.3-70b-versatile)
+anthropic>=0.40.0      # Provider alternatif (Claude) — gardé pour compatibilité
+
+# === Base de données ===
+sqlalchemy>=2.0.0
+
+# === Configuration ===
+python-dotenv>=1.0.0
+pydantic>=2.0.0
+pydantic-settings>=2.0.0
+
+# === Requêtes HTTP (async) ===
+httpx>=0.27.0
+aiohttp>=3.10.0
+tenacity>=9.0.0
+
+# === Géolocalisation ===
+geopy>=2.4.0
+haversine>=2.8.0
+
+# === Scraping web (Phase 4) ===
+playwright>=1.48.0
+beautifulsoup4>=4.12.0
+lxml>=5.0.0
+
+# === Export PDF ===
+reportlab>=4.2.0
+
+# === Data & Visualisation ===
+pandas>=2.2.0
+plotly>=5.20.0
+
+# === Logging & Utilitaires ===
+loguru>=0.7.0
+rich>=13.0.0
+python-slugify>=8.0.0
+
+# === Parsing XML/JSON (API BCE) ===
+xmltodict>=0.13.0

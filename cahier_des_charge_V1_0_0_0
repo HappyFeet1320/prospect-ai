@@ -1,0 +1,538 @@
+
+CAHIER DES CHARGES
+Agent Intelligent de Recherche d'Opportunités Professionnelles
+
+PROSPECT-AI
+
+Version	1.0.0 — Draft Initial
+Date	Février 2026
+Statut	Document de référence unique
+Contexte géographique	Belgique (BCE / BNB / LinkedIn BE)
+
+Table des Matières
+Table des Matières	2
+1. Introduction et Vision du Projet	5
+1.1 Contexte	5
+1.2 Problématique	5
+1.3 Objectifs Généraux	5
+1.4 Périmètre Géographique	5
+2. Architecture Générale de l'Agent	6
+2.1 Vue d'Ensemble des Phases	6
+2.2 Diagramme de Flux	6
+2.3 Stack Technologique	6
+3. Phase 1 — Profiling Opérateur	7
+3.1 Description Fonctionnelle	7
+3.2 Collecte des Données Opérateur	7
+3.2.1 Informations Obligatoires	7
+3.2.2 Informations Optionnelles (enrichissement)	7
+3.3 Traitement par l'IA	7
+3.4 Output : Fiche Profil Normalisée	7
+4. Phase 2 — Recherche Large via BCE/KBO	9
+4.1 Source de Données : API BCE Belge	9
+4.2 Paramètres de Requête	9
+4.3 Logique de Requête	9
+4.3.1 Stratégie de Requêtes Multiples	9
+4.3.2 Pagination et Rate Limiting	9
+4.3.3 Données Récupérées par Entreprise (Phase 2)	9
+4.4 Volume Attendu et Seuils	10
+5. Phase 3 — Filtrage et Scoring	11
+5.1 Objectif	11
+5.2 Critères de Scoring	11
+Critère 1 — Alignement Sectoriel (Poids : 40%)	11
+Critère 2 — Proximité Géographique (Poids : 30%)	11
+Critère 3 — Potentiel Structurel (Poids : 30%)	11
+5.3 Score Global et Seuil de Sélection	11
+5.4 Enrichissement Léger en Phase 3	12
+6. Phase 4 — Recherche Approfondie par Entreprise	13
+6.1 Objectif	13
+6.2 Sources de Données Phase 4	13
+6.3 Structure du Dossier Entreprise	13
+6.3.1 Bloc Identité	13
+6.3.2 Bloc Financier	13
+6.3.3 Bloc Commercial	14
+6.3.4 Bloc Décideurs Clés	14
+6.3.5 Bloc Contexte Recrutement	14
+6.4 Parallélisation et Performance	14
+7. Phase 5 — Préparation à l'Entretien	15
+7.1 Objectif	15
+7.2 Contenu du Kit de Préparation	15
+7.2.1 Message d'Accroche Personnalisé	15
+7.2.2 Situations Ambiguës de Préparation	15
+7.2.3 Questions Clés à Poser	15
+7.2.4 Points de Vigilance	15
+7.2.5 Résumé Exécutif 1 Page	16
+7.3 Personnalisation Contextuelle	16
+8. Intégrations et APIs Externes	17
+8.1 API BCE / KBO — Banque-Carrefour des Entreprises	17
+8.2 BNB — Banque Nationale de Belgique	17
+8.3 API LLM — Anthropic Claude	17
+8.4 Recherche Web	17
+8.5 Données de Contact (Optionnel)	17
+9. Modèle de Données	19
+9.1 Entités Principales	19
+Session	19
+Company	19
+DecisionMaker	19
+PreparationKit	19
+9.2 Cache et Performance	19
+10. Interface Utilisateur	21
+10.1 Principes UX	21
+10.2 Écrans Principaux	21
+Écran 1 — Onboarding / Saisie Profil	21
+Écran 2 — Suivi Recherche BCE	21
+Écran 3 — Liste Scorée Phase 3	21
+Écran 4 — Dossiers Entreprises Phase 4	21
+Écran 5 — Kit de Préparation Phase 5	21
+10.3 Mode d'Interface	22
+11. Exigences Non Fonctionnelles	23
+11.1 Performance	23
+11.2 Fiabilité	23
+11.3 Sécurité et Vie Privée	23
+11.4 Maintenabilité	23
+12. Plan de Développement	24
+12.1 Jalons	24
+12.2 Priorités de Développement	24
+12.3 Critères de Réussite	24
+13. Questions Ouvertes et Décisions Pending	25
+13.1 Hypothèses de Travail	25
+14. Glossaire	26
+
+
+1. Introduction et Vision du Projet
+1.1 Contexte
+PROSPECT-AI est un agent intelligent multi-phases conçu pour accompagner un opérateur (chercheur d'emploi, freelance, reconversion professionnelle) dans l'identification et la qualification d'opportunités professionnelles en Belgique. L'agent automatise l'ensemble du processus, de la définition du profil jusqu'à la préparation de l'entretien, en s'appuyant sur des sources de données officielles et des outils de recherche avancée.
+Le document présent constitue la référence unique de développement. Toute décision d'architecture, de fonctionnalité, ou d'implémentation doit être tracée et validée ici avant développement.
+
+1.2 Problématique
+La recherche d'emploi ou de mission professionnelle est un processus chronophage et souvent mal structuré. L'opérateur doit simultanément : identifier les secteurs pertinents, localiser les entreprises cibles, qualifier leur potentiel, trouver les bons interlocuteurs, et adapter son approche pour maximiser ses chances de décrocher un entretien. PROSPECT-AI résout ce problème en orchestrant ce processus de manière automatisée, intelligente et personnalisée.
+
+1.3 Objectifs Généraux
+•	Réduire de 80% le temps de recherche manuelle pour l'opérateur
+•	Identifier des entreprises réellement correspondantes au profil opérateur via des données officielles belges
+•	Scorer automatiquement le potentiel de match entre l'opérateur et chaque entreprise cible
+•	Produire un dossier complet par entreprise retenue : contacts, finances, culture, interlocuteurs clés
+•	Générer du contenu personnalisé pour préparer l'opérateur à l'entretien
+
+1.4 Périmètre Géographique
+Version 1.0 : Belgique uniquement (Région wallonne, flamande, Bruxelles-Capitale). Les sources de données officielles belges sont prioritaires. Extension vers d'autres pays prévue en version 2.0.
+
+2. Architecture Générale de l'Agent
+2.1 Vue d'Ensemble des Phases
+PROSPECT-AI fonctionne en 5 phases séquentielles avec des points de validation opérateur entre chaque phase. Aucune phase ne démarre sans validation explicite de l'opérateur.
+
+Phase	Nom	Description	Output
+P1	Profiling Opérateur	Collecte et analyse des compétences, expériences, localisation et aspirations. L'IA détermine le profil professionnel et les secteurs cibles.	Fiche profil + codes NACE + zones géo
+P2	Recherche Large (BCE)	Interrogation de l'API BCE/KBO belge par codes NACE et localité. Collecte de toutes les entreprises correspondantes.	Liste brute d'entreprises (200-2000 résultats)
+P3	Filtrage & Scoring	Analyse de chaque entreprise sur 2-3 critères de match. Réduction de la liste aux candidats les plus pertinents.	Liste qualifiée (20-50 entreprises)
+P4	Recherche Approfondie	Pour chaque entreprise retenue : financier, contacts, RH, décideurs, actualités, clients.	Dossiers complets par entreprise
+P5	Préparation Entretien	Génération de phrases d'accroche, questions types, points de vigilance et stratégies d'approche personnalisées.	Kit de préparation opérateur
+
+2.2 Diagramme de Flux
+Note architecturale : L'agent est conçu comme un pipeline LLM orchestré. Chaque phase peut être re-déclenchée indépendamment si l'opérateur souhaite modifier ses paramètres. Les résultats de chaque phase sont persistés en base locale pour éviter les appels API redondants.
+
+2.3 Stack Technologique
+•	Langage principal : Python 3.11+
+•	Orchestration LLM : LangChain ou LlamaIndex (à décider en phase de conception technique)
+•	LLM : Claude API (Anthropic) — modèle claude-sonnet-4-6 par défaut
+•	Interface opérateur : application web React ou interface CLI interactive (à décider)
+•	Base de données locale : SQLite pour persistence des sessions et résultats
+•	Requêtes API : httpx (async) pour toutes les intégrations externes
+
+3. Phase 1 — Profiling Opérateur
+3.1 Description Fonctionnelle
+Cette phase est le point d'entrée de l'agent. L'opérateur décrit sa situation en langage naturel. L'IA analyse ce texte et structure les informations en un profil normalisé. Si des informations manquent, l'agent pose des questions de relance ciblées.
+
+3.2 Collecte des Données Opérateur
+3.2.1 Informations Obligatoires
+•	Expériences professionnelles : postes occupés, durées, responsabilités clés
+•	Compétences techniques et sectorielles
+•	Niveau de formation et certifications
+•	Localisation géographique souhaitée (ville, province, rayon kilométrique)
+•	Type de contrat recherché : CDI, CDD, freelance, intérim, alternance
+•	Disponibilité (immédiate, préavis, date précise)
+3.2.2 Informations Optionnelles (enrichissement)
+•	Prétentions salariales ou taux journalier
+•	Secteurs à éviter
+•	Taille d'entreprise préférée (PME, grande entreprise, startup)
+•	Langues maîtrisées
+•	Mobilité (télétravail, déplacements, international)
+
+3.3 Traitement par l'IA
+L'IA effectue les opérations suivantes sur le texte libre de l'opérateur :
+1.	Extraction des entités nommées : postes, entreprises, technologies, certifications
+2.	Classification sectorielle : association aux codes NACE (nomenclature belge des activités économiques) les plus pertinents — minimum 3, maximum 10 codes NACE
+3.	Détermination du niveau hiérarchique cible : opérationnel, cadre, direction
+4.	Identification des zones géographiques : traduction ville/région en codes postaux belges
+5.	Génération d'un score de confiance sur chaque élément du profil
+
+3.4 Output : Fiche Profil Normalisée
+La fiche profil est un objet JSON structuré contenant :
+•	operator_id : identifiant unique de session
+•	profile_summary : résumé en 3-5 phrases du profil
+•	nace_codes : liste de codes NACE prioritaires avec pondération (0.0 à 1.0)
+•	target_locations : liste de codes postaux et communes cibles
+•	search_radius_km : rayon de recherche en kilomètres
+•	contract_types : types de contrat acceptés
+•	seniority_level : junior / medior / senior / direction
+•	must_have_skills : compétences non-négociables
+•	nice_to_have_skills : compétences bonus
+•	exclusion_list : secteurs ou types d'entreprises à exclure
+
+Point de validation P1 : L'opérateur valide explicitement la fiche profil avant passage en P2. Il peut corriger tout élément. Toute modification relance la génération des codes NACE si nécessaire.
+
+4. Phase 2 — Recherche Large via BCE/KBO
+4.1 Source de Données : API BCE Belge
+La Banque-Carrefour des Entreprises (BCE) est le registre officiel des entreprises belges, géré par le SPF Économie. Elle recense plus de 1,5 million d'entreprises actives. L'accès se fait via l'API publique KBO Open Data.
+
+4.2 Paramètres de Requête
+Paramètre	Source	Description
+Code NACE	Fiche profil P1	Un ou plusieurs codes à 4-5 chiffres identifiant l'activité économique
+Localité / Code postal	Fiche profil P1	Filtrage géographique par commune, province ou région
+Statut juridique	Configurable	Actif uniquement (exclure en liquidation, dissolution)
+Type d'entité	Configurable	SA, SRL, ASBL, personne physique, etc.
+Taille estimée	Optionnel	Filtrage par nombre d'employés si disponible via BCE
+
+4.3 Logique de Requête
+4.3.1 Stratégie de Requêtes Multiples
+Pour chaque code NACE de la fiche profil, une requête distincte est lancée. Les résultats sont dédupliqués par numéro BCE (identifiant unique entreprise). La pondération des codes NACE est utilisée pour ordonner les résultats.
+4.3.2 Pagination et Rate Limiting
+•	Gestion automatique de la pagination (max 100 résultats par page)
+•	Rate limiting : maximum 10 requêtes/seconde vers l'API BCE
+•	Mécanisme de retry avec backoff exponentiel (3 tentatives max)
+•	Cache local : les résultats BCE sont mis en cache 24h pour éviter les requêtes redondantes
+4.3.3 Données Récupérées par Entreprise (Phase 2)
+•	Numéro BCE (identifiant unique)
+•	Dénomination sociale et nom commercial
+•	Adresse du siège social
+•	Forme juridique
+•	Date de création
+•	Codes NACE déclarés (activité principale et secondaires)
+•	Statut actif/inactif
+
+4.4 Volume Attendu et Seuils
+La recherche large peut retourner entre 50 et 5000 entreprises selon la combinaison NACE/localité. Des seuils sont définis pour garantir la pertinence du pipeline :
+•	Moins de 20 résultats : l'agent suggère d'élargir les codes NACE ou le rayon géographique
+•	Entre 20 et 500 résultats : traitement standard vers Phase 3
+•	Plus de 500 résultats : application automatique de pré-filtres avant Phase 3 (date création min, forme juridique)
+
+Point de validation P2 : L'opérateur visualise le nombre d'entreprises trouvées par code NACE et par zone géographique. Il peut ajuster les paramètres avant de lancer la Phase 3.
+
+5. Phase 3 — Filtrage et Scoring
+5.1 Objectif
+Réduire la liste brute de la Phase 2 (potentiellement plusieurs centaines d'entreprises) à une liste qualifiée de 20 à 50 entreprises présentant le meilleur potentiel de match avec le profil opérateur. Ce filtrage s'effectue sur 3 critères principaux.
+
+5.2 Critères de Scoring
+Critère 1 — Alignement Sectoriel (Poids : 40%)
+Mesure la correspondance entre les codes NACE de l'entreprise et ceux identifiés dans le profil opérateur. Une entreprise ayant son activité principale dans un code NACE de haute priorité opérateur obtient un score maximal.
+•	Score 1.0 : code NACE principal = code NACE prioritaire opérateur (poids > 0.8)
+•	Score 0.7 : code NACE secondaire = code NACE prioritaire opérateur
+•	Score 0.4 : code NACE connexe (même division NACE à 2 chiffres)
+•	Score 0.0 : aucun alignement NACE
+
+Critère 2 — Proximité Géographique (Poids : 30%)
+Calcul de la distance entre le siège social de l'entreprise et la zone géographique cible de l'opérateur, pondéré par les préférences de mobilité déclarées.
+•	Score 1.0 : dans le rayon principal défini par l'opérateur
+•	Score 0.6 : dans un rayon étendu (x1.5 le rayon principal)
+•	Score 0.3 : même province / région
+•	Score 0.0 : hors zone acceptable
+
+Critère 3 — Potentiel Structurel (Poids : 30%)
+Évalue la maturité et la stabilité de l'entreprise comme indicateur indirect de sa capacité à recruter.
+•	Ancienneté > 5 ans : +0.3
+•	Forme juridique SA ou SRL : +0.2 (structure formelle)
+•	Activités secondaires diversifiées (> 2 codes NACE) : +0.2 (complexité organisationnelle)
+•	Adresse dans zone d'activité économique connue : +0.3
+
+5.3 Score Global et Seuil de Sélection
+Le score global est la somme pondérée des 3 critères (0.0 à 1.0). Seules les entreprises avec un score >= 0.45 passent en Phase 4. En cas de liste trop courte (< 15 entreprises), le seuil est abaissé automatiquement à 0.35 avec notification à l'opérateur.
+
+5.4 Enrichissement Léger en Phase 3
+Avant de finaliser le scoring, l'agent effectue un enrichissement léger via la BNB (Banque Nationale de Belgique) pour les entreprises ayant un numéro BCE valide :
+•	Chiffre d'affaires déclaré (dernière année disponible)
+•	Résultat net
+•	Nombre de travailleurs déclarés à la BCE
+Ces données enrichissent le Critère 3 et peuvent disqualifier des entreprises en difficultés financières sévères (résultat net négatif sur 3 exercices consécutifs).
+
+Point de validation P3 : L'opérateur consulte la liste scorée avec justification des scores. Il peut manuellement inclure ou exclure des entreprises avant passage en Phase 4.
+
+6. Phase 4 — Recherche Approfondie par Entreprise
+6.1 Objectif
+Pour chaque entreprise de la liste qualifiée (Phase 3), constituer un dossier complet permettant à l'opérateur de comprendre l'entreprise, d'identifier les bons interlocuteurs et de personnaliser son approche.
+
+6.2 Sources de Données Phase 4
+Source	Données collectées	Méthode	Priorité
+BNB (Banque Nationale)	Bilans, comptes de résultats, dettes, capitaux propres	API BNB Open Data	Haute
+BCE / KBO	Dirigeants, administrateurs, historique	API BCE	Haute
+Site web entreprise	Mission, valeurs, produits, clients, actualités, offres d'emploi	Web scraping ciblé	Haute
+LinkedIn (public)	Employés, décideurs, postes RH ouverts	Recherche web + scraping light	Moyenne
+Google / Actualités	Mentions presse, levées de fonds, partenariats, incidents	Google Search API ou SerpAPI	Moyenne
+Hunter.io / Apollo (optionnel)	Emails professionnels vérifiés	API tierce (clé requise)	Basse
+
+6.3 Structure du Dossier Entreprise
+6.3.1 Bloc Identité
+•	Raison sociale, nom commercial, logo si disponible
+•	Adresse complète, téléphone principal, site web, email générique
+•	Date de création, forme juridique, capital social
+•	Secteur principal, description en 3-5 phrases (générée par IA depuis site web)
+6.3.2 Bloc Financier
+•	Chiffre d'affaires sur 3 derniers exercices disponibles (BNB)
+•	Résultat net sur 3 derniers exercices
+•	Total bilan
+•	Nombre de travailleurs déclarés (ONSS / BCE)
+•	Tendance de croissance : signal positif / stable / déclin
+•	Indicateur de risque financier (Altman Z-score simplifié si données disponibles)
+6.3.3 Bloc Commercial
+•	Clients connus ou types de clients (B2B / B2C / B2G)
+•	Références clients publiques (issues du site web)
+•	Partenaires connus
+•	Marchés adressés (national, européen, international)
+•	Offres d'emploi actives récentes (indicateur de croissance et besoins)
+6.3.4 Bloc Décideurs Clés
+L'agent identifie 3 à 4 personnes clés dans le processus de recrutement ou de décision :
+•	Directeur Général / CEO
+•	Directeur RH ou Responsable Recrutement
+•	Directeur du département cible (selon profil opérateur)
+•	Office Manager ou Assistant(e) de direction (accès facilité)
+Pour chaque décideur identifié :
+•	Prénom, nom, titre
+•	Email professionnel (si disponible via Hunter.io ou pattern détecté)
+•	Profil LinkedIn (URL publique)
+•	Ancienneté dans l'entreprise
+•	Biographie courte (3 phrases) générée par IA
+6.3.5 Bloc Contexte Recrutement
+•	Offres d'emploi actives (scraping Indeed BE, LinkedIn Jobs, site carrière entreprise)
+•	Signaux de croissance : levées de fonds, nouveaux marchés, expansion
+•	Signaux de difficulté : PSE, restructuration, baisse CA
+•	Dernière mention presse datée
+
+6.4 Parallélisation et Performance
+La recherche approfondie est effectuée en parallèle pour toutes les entreprises qualifiées, avec un maximum de 5 recherches simultanées pour respecter les rate limits des APIs externes. Le temps de traitement estimé est de 2 à 5 minutes pour une liste de 30 entreprises.
+Point de validation P4 : L'opérateur accède aux dossiers complets. Il peut noter chaque entreprise (1-5 étoiles) et exclure celles qui ne l'intéressent pas. Seules les entreprises 3 étoiles et plus sont traitées en Phase 5.
+
+7. Phase 5 — Préparation à l'Entretien
+7.1 Objectif
+Pour chaque entreprise finalement sélectionnée, l'agent génère un kit de préparation personnalisé permettant à l'opérateur de maximiser ses chances d'obtenir un entretien et de performer lors de celui-ci.
+
+7.2 Contenu du Kit de Préparation
+7.2.1 Message d'Accroche Personnalisé
+L'agent génère 3 variantes de messages d'accroche (email, LinkedIn, appel téléphonique) adaptés à l'entreprise et au décideur ciblé. Chaque variante met en avant un angle différent :
+•	Variante 1 — Angle Valeur : ce que l'opérateur peut apporter spécifiquement à cette entreprise
+•	Variante 2 — Angle Contexte : basé sur une actualité récente ou un défi identifié de l'entreprise
+•	Variante 3 — Angle Réseau : si un lien commun ou une connexion peut être mentionné
+
+7.2.2 Situations Ambiguës de Préparation
+L'agent génère 4 à 6 questions ou situations délicates spécifiques à l'entreprise et au secteur, avec des conseils de réponse. Exemples :
+•	'Comment justifiez-vous votre période sans emploi de X mois ?' — réponse suggérée
+•	'Nous cherchons quelqu'un avec expérience en [technologie manquante dans le profil]' — réponse suggérée
+•	'Pourquoi vous intéressez-vous à une PME après votre expérience en grande entreprise ?' — réponse suggérée
+
+7.2.3 Questions Clés à Poser
+L'agent suggère 5 questions pertinentes que l'opérateur peut poser lors de l'entretien, basées sur le dossier entreprise (Phase 4). Ces questions démontrent une connaissance approfondie de l'entreprise.
+
+7.2.4 Points de Vigilance
+L'agent identifie les risques potentiels de la prise de poste : instabilité financière détectée, turnover apparent (plusieurs offres similaires récentes), décalage culturel visible, etc.
+
+7.2.5 Résumé Exécutif 1 Page
+Fiche synthétique imprimable (ou exportable en PDF) combinant les informations clés de l'entreprise, le nom du décideur à contacter, le message d'accroche retenu et les 3 points forts de l'opérateur à mettre en avant pour cette cible spécifique.
+
+7.3 Personnalisation Contextuelle
+La génération de contenu Phase 5 intègre systématiquement les données suivantes pour assurer la pertinence maximale :
+•	Profil opérateur complet (Phase 1)
+•	Données financières et contextuelles entreprise (Phase 4)
+•	Identité et background du décideur ciblé (Phase 4)
+•	Offres d'emploi actives de l'entreprise
+•	Actualités récentes de l'entreprise (< 6 mois)
+
+8. Intégrations et APIs Externes
+8.1 API BCE / KBO — Banque-Carrefour des Entreprises
+URL de base : https://kbopub.economie.fgov.be/kbopub/trefwoordenSearchAction.do
+•	Authentification : aucune clé requise pour l'API publique de base
+•	Format de réponse : XML ou JSON selon endpoint
+•	Rate limit : 10 req/s recommandé, pas de limite officielle documentée
+•	Données disponibles : identification entreprise, forme juridique, activités NACE, administrateurs, adresses
+•	Limitation : les données de taille d'entreprise (nombre d'employés) ne sont pas systématiquement disponibles
+
+8.2 BNB — Banque Nationale de Belgique
+URL de base : https://www.nbb.be/fr/centrale-des-bilans/obtenir-des-comptes-annuels
+•	Accès : API REST BNB Open Data (nécessite inscription gratuite)
+•	Données disponibles : comptes annuels déposés, bilan, compte de résultats, données sociales
+•	Couverture : entreprises obligées de déposer leurs comptes (SA, SRL, SCRL, etc.)
+•	Limitation : PME à comptabilité simplifiée ont un dépôt allégé
+•	Format : JSON / XBRL
+
+8.3 API LLM — Anthropic Claude
+•	Modèle par défaut : claude-sonnet-4-6
+•	Usages : analyse profil opérateur, génération codes NACE, scoring Phase 3, génération dossiers Phase 4, rédaction Phase 5
+•	Gestion des coûts : estimation des tokens avant chaque appel, alertes si dépassement de seuil
+•	Fallback : si Claude API indisponible, mise en file d'attente des tâches LLM
+
+8.4 Recherche Web
+•	Option A : SerpAPI (payant, stable, recommandé pour production)
+•	Option B : DuckDuckGo API (gratuit, limité)
+•	Option C : Playwright headless pour scraping ciblé des sites entreprises
+
+8.5 Données de Contact (Optionnel)
+•	Hunter.io API : vérification et découverte d'emails professionnels (plan gratuit : 25 req/mois)
+•	Apollo.io API : données enrichies sur entreprises et contacts (plan gratuit limité)
+
+Note de configuration : Toutes les clés API sont stockées dans un fichier .env local, jamais en clair dans le code. Un fichier .env.example est fourni avec la documentation. La gestion des secrets est obligatoire dès la première ligne de code.
+
+9. Modèle de Données
+9.1 Entités Principales
+Session
+•	session_id : UUID
+•	created_at, updated_at : timestamps
+•	current_phase : entier 1-5
+•	operator_profile : JSON (fiche profil Phase 1)
+•	status : active / completed / archived
+Company
+•	company_id : UUID interne
+•	bce_number : numéro BCE officiel (unique)
+•	session_id : référence session
+•	phase2_data : JSON (données brutes BCE)
+•	phase3_score : float (0.0-1.0)
+•	phase3_score_detail : JSON (détail par critère)
+•	phase4_data : JSON (dossier complet)
+•	operator_rating : entier 1-5 (notation manuelle)
+•	is_selected : booléen (sélection finale)
+DecisionMaker
+•	dm_id : UUID
+•	company_id : référence Company
+•	full_name, title, email, linkedin_url
+•	seniority_years, bio_short
+•	dm_type : CEO / HR / DEPT_HEAD / OFFICE_MGR
+PreparationKit
+•	kit_id : UUID
+•	company_id : référence Company
+•	message_variants : JSON (3 variantes)
+•	ambiguous_situations : JSON (4-6 situations)
+•	questions_to_ask : JSON (5 questions)
+•	risk_flags : JSON (points de vigilance)
+•	executive_summary : texte long
+
+9.2 Cache et Performance
+•	Résultats BCE : TTL 24 heures
+•	Résultats BNB : TTL 7 jours (données annuelles stables)
+•	Résultats web scraping : TTL 12 heures
+•	Résultats LLM : persistés indéfiniment (pas de recalcul si déjà généré)
+
+10. Interface Utilisateur
+10.1 Principes UX
+L'interface doit suivre le modèle conversationnel : l'opérateur interagit en langage naturel. Les données structurées (tableaux, listes scorées, dossiers) sont présentées dans des composants visuels clairs. Chaque phase se termine par un écran de validation explicite avant continuation.
+
+10.2 Écrans Principaux
+Écran 1 — Onboarding / Saisie Profil
+•	Zone de texte libre pour description de situation
+•	Questions guidées si informations manquantes (mode dialogue)
+•	Visualisation de la fiche profil générée en temps réel
+•	Carte interactive des zones géographiques sélectionnées
+•	Bouton validation explicite
+Écran 2 — Suivi Recherche BCE
+•	Barre de progression par code NACE
+•	Compteur en temps réel (entreprises trouvées)
+•	Répartition géographique des résultats
+•	Bouton pour ajuster les paramètres
+Écran 3 — Liste Scorée Phase 3
+•	Tableau triable avec score global et détail par critère
+•	Filtre par score, secteur, taille, localité
+•	Case à cocher pour inclusion/exclusion manuelle
+•	Bouton 'Lancer recherche approfondie' avec estimation de durée
+Écran 4 — Dossiers Entreprises Phase 4
+•	Vue liste + vue détail
+•	Onglets : Identité / Financier / Commercial / Décideurs / Recrutement
+•	Système de notation étoiles (1-5)
+•	Export PDF du dossier individuel
+Écran 5 — Kit de Préparation Phase 5
+•	Sélecteur d'entreprise cible
+•	Affichage des 3 variantes de message avec bouton copier
+•	Liste des situations ambiguës avec accordéon réponses suggérées
+•	Fiche résumé 1 page avec bouton export PDF
+
+10.3 Mode d'Interface
+Version 1.0 : application web React (port local 3000) ou interface CLI interactive avec rich terminal (Python rich library). Le choix final est laissé à l'équipe de développement selon les contraintes de délai. Version 2.0 : application web déployée avec authentification multi-utilisateur.
+
+11. Exigences Non Fonctionnelles
+11.1 Performance
+•	Phase 1 : génération fiche profil < 30 secondes
+•	Phase 2 : recherche BCE < 5 minutes pour 500 entreprises
+•	Phase 3 : scoring < 2 minutes pour 500 entreprises
+•	Phase 4 : dossier complet par entreprise < 3 minutes (en parallèle)
+•	Phase 5 : kit de préparation par entreprise < 2 minutes
+
+11.2 Fiabilité
+•	Sauvegarde automatique après chaque phase
+•	Reprise possible après interruption depuis la dernière phase validée
+•	Gestion des erreurs API : log, notification, retry automatique
+•	Mode dégradé si une API externe est indisponible (contenu partiel plutôt que blocage)
+
+11.3 Sécurité et Vie Privée
+•	Aucune donnée opérateur transmise à des tiers (sauf LLM pour traitement)
+•	Données stockées localement uniquement (SQLite local)
+•	Clés API chiffrées au repos
+•	Conformité RGPD : pas de collecte de données personnelles sans consentement explicite
+•	Les données des décideurs (emails, profils) sont collectées depuis sources publiques uniquement
+
+11.4 Maintenabilité
+•	Code Python documenté (docstrings, type hints)
+•	Tests unitaires pour toutes les fonctions de scoring et de parsing
+•	Tests d'intégration pour chaque connecteur API
+•	Architecture modulaire : chaque phase est un module indépendant
+•	Configuration externalisée dans fichiers YAML / .env
+
+12. Plan de Développement
+12.1 Jalons
+Jalon	Nom	Livrables	Durée estimée
+M1	Fondations	Structure projet, config .env, modèle de données SQLite, connexion API BCE + BNB	1 semaine
+M2	Phase 1 & 2	Module profiling LLM, intégration BCE complète, tests unitaires P1+P2	1 semaine
+M3	Phase 3	Module scoring, enrichissement BNB, interface liste scorée, tests	1 semaine
+M4	Phase 4	Scraping web, module décideurs, dossier entreprise complet, tests	2 semaines
+M5	Phase 5	Génération kits préparation, export PDF, tests end-to-end	1 semaine
+M6	UI & Finitions	Interface finale, documentation utilisateur, optimisation performance	1 semaine
+
+12.2 Priorités de Développement
+En cas de contrainte de temps, les fonctionnalités sont priorisées dans l'ordre suivant :
+6.	Profiling opérateur + recherche BCE (P1 + P2) — cœur du produit
+7.	Scoring Phase 3 — différenciateur clé
+8.	Dossier entreprise Phase 4 (sans décideurs) — valeur immédiate
+9.	Kit préparation Phase 5 — valeur ajoutée finale
+10.	Identification décideurs — complexité technique élevée, priorité secondaire
+11.	Données financières BNB — enrichissement, non bloquant
+
+12.3 Critères de Réussite
+•	L'opérateur peut compléter une session complète (P1 à P5) en moins de 30 minutes de temps de travail effectif
+•	Le taux de pertinence des entreprises identifiées est jugé satisfaisant par l'opérateur (> 70% des suggestions Phase 3 considérées comme pertinentes)
+•	Au moins 1 entretien obtenu via une approche générée par l'outil dans les 30 jours suivant la première utilisation
+
+13. Questions Ouvertes et Décisions Pending
+Les éléments suivants nécessitent une décision avant ou pendant le développement. Chaque décision doit être documentée dans ce fichier avec date et justification.
+
+#	Question	Options	Impact
+1	Interface : web React ou CLI Python ?	React (complexité UI) vs CLI rich (rapidité dev)	Architecture frontend complète
+2	Orchestration LLM : LangChain ou LlamaIndex ?	LangChain (maturité) vs LlamaIndex (RAG natif)	Structure des agents
+3	Scraping décideurs : Playwright ou API tierce ?	Playwright (gratuit, fragile) vs Apollo (payant, stable)	Budget et fiabilité P4
+4	Déploiement : local uniquement ou cloud ?	Local SQLite vs PostgreSQL cloud	Multi-utilisateur futur
+5	Gestion rate limits BCE : bibliothèque ou maison ?	ratelimit lib vs implémentation custom	Robustesse P2
+
+13.1 Hypothèses de Travail
+En attendant les décisions formelles, les hypothèses suivantes sont adoptées comme défaut de développement :
+•	Interface : CLI Python avec rich library (plus rapide à développer en V1)
+•	Orchestration : LangChain (communauté plus large, documentation plus riche)
+•	Décideurs : Playwright headless en V1, migration Apollo possible en V2
+•	Déploiement : local uniquement en V1
+
+14. Glossaire
+Terme	Définition
+BCE	Banque-Carrefour des Entreprises — registre officiel belge des entreprises géré par le SPF Économie
+BNB	Banque Nationale de Belgique — publie les comptes annuels déposés par les entreprises belges
+Code NACE	Nomenclature européenne des activités économiques. Identifie le secteur d'activité d'une entreprise (ex: 6201 = développement de logiciels)
+KBO	Kruispuntbank van Ondernemingen — nom flamand de la BCE
+Opérateur	Utilisateur de PROSPECT-AI : chercheur d'emploi, freelance ou personne en reconversion
+Profil Normalisé	Représentation JSON structurée du profil opérateur générée par l'IA en Phase 1
+Score de Match	Note de 0.0 à 1.0 évaluant la pertinence d'une entreprise pour l'opérateur (Phase 3)
+Décideur Clé	Personne au sein de l'entreprise ayant un pouvoir de décision sur le recrutement : CEO, DRH, responsable de département
+Kit de Préparation	Ensemble de documents générés en Phase 5 pour préparer l'opérateur à l'entretien
+TTL	Time To Live — durée de validité d'un élément en cache avant rafraîchissement
+
+FIN DU CAHIER DES CHARGES — Document de référence unique
+
+PROSPECT-AI v1.0 — Toute modification de ce document doit être versionnée
