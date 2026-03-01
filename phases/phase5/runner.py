@@ -8,6 +8,7 @@ génère un kit LLM par entreprise, et sauvegarde en base (PreparationKit).
 from __future__ import annotations
 
 import time
+import traceback
 from dataclasses import dataclass, field
 
 from loguru import logger
@@ -57,16 +58,12 @@ def run_phase5(
     warnings: list[str] = []
 
     # ── Charger les entreprises éligibles ────────────────────
-    # Eligible = sélectionnées en Phase 4 (is_selected=True) OU notation ≥ 3
+    # Eligible = toutes les entreprises enrichies en Phase 4
     with get_session() as db:
         stmt = (
             select(Company)
             .where(Company.session_id == session_id)
             .where(Company.phase4_data_json.isnot(None))
-            .where(
-                (Company.is_selected.is_(True)) |
-                (Company.operator_rating >= 3)
-            )
         )
         companies_db: list[Company] = list(db.execute(stmt).scalars().all())
 
@@ -78,8 +75,8 @@ def run_phase5(
             generated_count=0,
             failed_count=0,
             warnings=[
-                "Aucune entreprise éligible pour la Phase 5. "
-                "Notez au moins une entreprise 3 étoiles ou plus en Phase 4."
+                "Aucune entreprise enrichie trouvée pour la Phase 5. "
+                "Lancez d'abord l'enrichissement en Phase 4."
             ],
         )
 
@@ -113,14 +110,21 @@ def run_phase5(
                 progress_callback(name, i + 1, total, "done")
 
         except Exception as e:
-            logger.warning("Phase 5 — erreur kit {} : {}", name[:40], e)
+            tb = traceback.format_exc()
+            logger.error("Phase 5 — erreur kit {} :\n{}", name[:40], tb)
             failed += 1
-            warnings.append(f"Échec génération kit pour « {name[:60]} » : {e}")
+            # Message d'erreur complet pour le débogage
+            error_type = type(e).__name__
+            error_msg  = str(e)[:300]
+            warnings.append(
+                f"Échec kit « {name[:50]} » — {error_type}: {error_msg}"
+            )
             if progress_callback:
                 progress_callback(name, i + 1, total, "error")
 
         if i < total - 1:
-            time.sleep(1.0)
+            # Pause entre kits : limite Groq ≈ 6 000 tokens/min sur tier gratuit
+            time.sleep(5.0)
 
     if failed > 0:
         warnings.append(f"{failed} kit(s) n'ont pas pu être générés.")
@@ -196,10 +200,6 @@ def load_phase5_results(session_id: str) -> list[dict]:
             select(Company)
             .where(Company.session_id == session_id)
             .where(Company.phase4_data_json.isnot(None))
-            .where(
-                (Company.is_selected.is_(True)) |
-                (Company.operator_rating >= 3)
-            )
         )
         companies_db = list(db.execute(stmt).scalars().all())
 

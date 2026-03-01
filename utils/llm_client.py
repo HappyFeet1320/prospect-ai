@@ -21,6 +21,7 @@ def call_with_json_tool(
     tool_name: str,
     tool_description: str,
     tool_schema: dict,
+    max_tokens: int = 4096,
 ) -> tuple[dict, dict]:
     """
     Appel LLM unifié avec extraction JSON garantie via function/tool calling.
@@ -52,9 +53,9 @@ def call_with_json_tool(
     logger.info(f"Appel LLM [{provider}] modele={settings.active_model} outil={tool_name}")
 
     if provider == "groq":
-        return _call_groq(system, user, tool_name, tool_description, tool_schema)
+        return _call_groq(system, user, tool_name, tool_description, tool_schema, max_tokens)
     elif provider == "anthropic":
-        return _call_anthropic(system, user, tool_name, tool_description, tool_schema)
+        return _call_anthropic(system, user, tool_name, tool_description, tool_schema, max_tokens)
     else:
         raise ValueError(
             f"LLM_PROVIDER='{provider}' inconnu. Valeurs acceptées : groq, anthropic"
@@ -92,14 +93,15 @@ def _clean_schema_for_groq(schema: dict) -> dict:
 
 def _call_groq(
     system: str, user: str,
-    tool_name: str, tool_description: str, tool_schema: dict
+    tool_name: str, tool_description: str, tool_schema: dict,
+    max_tokens: int = 4096,
 ) -> tuple[dict, dict]:
-    """Appel via SDK Groq (compatible OpenAI Chat Completions)."""
+    """Appel via SDK Groq avec retry automatique sur rate limit."""
+    import time as _time
     from groq import Groq
 
     client = Groq(api_key=settings.GROQ_API_KEY)
 
-    # Conversion format JSON Schema → format OpenAI function
     groq_tool = {
         "type": "function",
         "function": {
@@ -109,41 +111,70 @@ def _call_groq(
         }
     }
 
-    response = client.chat.completions.create(
-        model=settings.GROQ_MODEL,
-        messages=[
-            {"role": "system", "content": system},
-            {"role": "user", "content": user},
-        ],
-        tools=[groq_tool],
-        tool_choice={"type": "function", "function": {"name": tool_name}},
-        temperature=0.2,
-        max_tokens=4096,
+    # Retry avec backoff exponentiel (rate limit Groq = 6 000 tokens/min sur tier gratuit)
+    max_retries = 4
+    wait_times  = [10, 30, 60, 120]  # secondes
+
+    last_error: Exception | None = None
+    for attempt in range(max_retries):
+        try:
+            response = client.chat.completions.create(
+                model=settings.GROQ_MODEL,
+                messages=[
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": user},
+                ],
+                tools=[groq_tool],
+                tool_choice={"type": "function", "function": {"name": tool_name}},
+                temperature=0.2,
+                max_tokens=max_tokens,
+            )
+
+            message = response.choices[0].message
+            if not message.tool_calls:
+                raise RuntimeError(
+                    f"Groq n'a pas retourné d'appel de fonction pour '{tool_name}'"
+                )
+
+            raw_args = message.tool_calls[0].function.arguments
+            try:
+                result = json.loads(raw_args)
+            except json.JSONDecodeError as e:
+                raise RuntimeError(f"Groq JSON invalide : {e}\n{raw_args[:300]}")
+
+            usage = {
+                "input_tokens": response.usage.prompt_tokens,
+                "output_tokens": response.usage.completion_tokens,
+                "model": settings.GROQ_MODEL,
+                "provider": "groq",
+            }
+            logger.success(
+                "Groq OK (tentative {}/{}) — {} in / {} out tokens",
+                attempt + 1, max_retries,
+                usage["input_tokens"], usage["output_tokens"],
+            )
+            return result, usage
+
+        except Exception as e:
+            last_error = e
+            err_str = str(e).lower()
+            # Retry uniquement sur rate limit (429) ou erreurs réseau transitoires
+            if "429" in str(e) or "rate_limit" in err_str or "rate limit" in err_str:
+                wait = wait_times[min(attempt, len(wait_times) - 1)]
+                logger.warning(
+                    "Groq rate limit (tentative {}/{}) — attente {}s : {}",
+                    attempt + 1, max_retries, wait, str(e)[:120],
+                )
+                _time.sleep(wait)
+            else:
+                # Erreur non-transitoire → pas de retry
+                logger.error("Groq erreur non-transitoire : {}", str(e)[:200])
+                raise
+
+    raise RuntimeError(
+        f"Groq — {max_retries} tentatives échouées (rate limit persistant). "
+        f"Dernière erreur : {last_error}"
     )
-
-    message = response.choices[0].message
-    if not message.tool_calls:
-        raise RuntimeError(
-            f"Groq n'a pas retourné d'appel de fonction pour '{tool_name}'"
-        )
-
-    raw_args = message.tool_calls[0].function.arguments
-    try:
-        result = json.loads(raw_args)
-    except json.JSONDecodeError as e:
-        raise RuntimeError(f"Groq a retourné un JSON invalide : {e}\n{raw_args[:200]}")
-
-    usage = {
-        "input_tokens": response.usage.prompt_tokens,
-        "output_tokens": response.usage.completion_tokens,
-        "model": settings.GROQ_MODEL,
-        "provider": "groq",
-    }
-
-    logger.success(
-        f"Groq OK — {usage['input_tokens']} tokens in / {usage['output_tokens']} tokens out"
-    )
-    return result, usage
 
 
 # ============================================================
@@ -152,7 +183,8 @@ def _call_groq(
 
 def _call_anthropic(
     system: str, user: str,
-    tool_name: str, tool_description: str, tool_schema: dict
+    tool_name: str, tool_description: str, tool_schema: dict,
+    max_tokens: int = 4096,
 ) -> tuple[dict, dict]:
     """Appel via SDK Anthropic avec tool_use forcé."""
     import anthropic as anthropic_sdk
@@ -167,7 +199,7 @@ def _call_anthropic(
 
     response = client.messages.create(
         model=settings.CLAUDE_MODEL,
-        max_tokens=4096,
+        max_tokens=max_tokens,
         system=system,
         tools=[anthropic_tool],
         tool_choice={"type": "tool", "name": tool_name},

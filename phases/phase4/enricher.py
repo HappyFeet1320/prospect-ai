@@ -2,17 +2,22 @@
 Phase 4 — Enrichissement d'une entreprise.
 
 Pour chaque entreprise :
-  1. Recherches DuckDuckGo multiples (site web, actualités, emplois, dirigeants)
-  2. Scraping site web (description, clients, mission, offres emploi)
-  3. Scraping page "À propos" si disponible
-  4. Recherche dirigeants via web
-  5. Appel LLM → synthèse complète structurée
+  0. CBE API → coordonnées officielles + date création + situation juridique + NACE
+  1. Recherche site web (CBE en priorité, sinon DDG)
+  2. Scraping multi-pages du site (À propos, Carrières)
+  3. Recherches DDG en parallèle (ThreadPoolExecutor) :
+       - Actualités / presse
+       - Offres d'emploi
+       - Dirigeants (web + LinkedIn DDG)
+       - Données financières (NBB, presse économique)
+  4. Appel LLM → synthèse complète structurée en 5 blocs
 """
 
 from __future__ import annotations
 
 import re
-import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass, field
 from datetime import datetime
 from urllib.parse import urljoin, urlparse, unquote
 
@@ -21,6 +26,70 @@ from bs4 import BeautifulSoup
 from loguru import logger
 
 from utils.llm_client import call_with_json_tool
+from phases.phase2.cbeapi_client import fetch_company_by_bce
+
+
+# ============================================================
+# Configuration d'enrichissement
+# ============================================================
+
+@dataclass
+class EnrichConfig:
+    """
+    Contrôle les sources utilisées lors de l'enrichissement Phase 4.
+
+    Presets :
+        EnrichConfig.rapide()    → CBE API seule         (~2-5s/entreprise)
+        EnrichConfig.standard()  → CBE + Web + DDG       (~30-45s/entreprise)
+        EnrichConfig.complet()   → Tout activé           (~60-90s/entreprise)
+    """
+    use_cbe_api:      bool = True   # CBE API — coordonnées officielles
+    use_web_scraping: bool = True   # Scraping du site web (About, Carrières)
+    use_ddg_news:     bool = True   # DDG actualités / presse
+    use_ddg_jobs:     bool = True   # DDG offres d'emploi
+    use_ddg_managers: bool = True   # DDG dirigeants web
+    use_linkedin:     bool = False  # DDG profils LinkedIn (plus lent)
+    use_financial:    bool = False  # DDG données financières (NBB, presse éco)
+
+    @classmethod
+    def rapide(cls) -> "EnrichConfig":
+        """CBE API uniquement — coordonnées officielles, pas de web."""
+        return cls(
+            use_cbe_api=True,
+            use_web_scraping=False,
+            use_ddg_news=False, use_ddg_jobs=False, use_ddg_managers=False,
+            use_linkedin=False, use_financial=False,
+        )
+
+    @classmethod
+    def standard(cls) -> "EnrichConfig":
+        """CBE + site web + DDG (actualités, emplois, dirigeants) — mode recommandé."""
+        return cls(
+            use_cbe_api=True,
+            use_web_scraping=True,
+            use_ddg_news=True, use_ddg_jobs=True, use_ddg_managers=True,
+            use_linkedin=False, use_financial=False,
+        )
+
+    @classmethod
+    def complet(cls) -> "EnrichConfig":
+        """Toutes sources activées — LinkedIn + données financières inclus."""
+        return cls(
+            use_cbe_api=True,
+            use_web_scraping=True,
+            use_ddg_news=True, use_ddg_jobs=True, use_ddg_managers=True,
+            use_linkedin=True, use_financial=True,
+        )
+
+    @classmethod
+    def web_seulement(cls) -> "EnrichConfig":
+        """Web + DDG uniquement — sans CBE API (si clé non configurée)."""
+        return cls(
+            use_cbe_api=False,
+            use_web_scraping=True,
+            use_ddg_news=True, use_ddg_jobs=True, use_ddg_managers=True,
+            use_linkedin=False, use_financial=False,
+        )
 
 
 # ============================================================
@@ -43,17 +112,26 @@ _TIMEOUT = 15
 # Point d'entrée principal
 # ============================================================
 
-def enrich_company(company: dict, profile: dict) -> dict:
+def enrich_company(
+    company: dict,
+    profile: dict,
+    config: EnrichConfig | None = None,
+) -> dict:
     """
     Constitue le dossier complet Phase 4 pour une entreprise.
 
     Args:
         company : dict Phase 2/3 (bce_number, denomination, city, …)
         profile : dict profil opérateur Phase 1
+        config  : EnrichConfig — contrôle les sources utilisées
+                  (défaut : EnrichConfig.standard())
 
     Returns:
         dict dossier avec 5 blocs.
     """
+    if config is None:
+        config = EnrichConfig.rapide()
+
     name  = company.get("denomination", "")
     city  = company.get("city", "")
     bce   = company.get("bce_number", "")
@@ -72,43 +150,125 @@ def enrich_company(company: dict, profile: dict) -> dict:
         "sources_used":     [],
     }
 
-    # ── 1. Recherche du site web officiel ────────────────────
-    website_url = _find_website(name, city)
+    # ── 0. CBE API — coordonnées + données officielles ───────
+    cbe_contacts: dict | None = None
+    if config.use_cbe_api:
+        cbe_contacts = fetch_company_by_bce(bce)
+        if cbe_contacts:
+            dossier["bloc_identite"].update({
+                "email_bce":           cbe_contacts.get("email", ""),
+                "phone_bce":           cbe_contacts.get("phone", ""),
+                "website_bce":         cbe_contacts.get("website", ""),
+                "start_date_bce":      cbe_contacts.get("start_date", ""),
+                "juridical_situation": cbe_contacts.get("juridical_situation", ""),
+            })
+            dossier["sources_used"].append("cbe_api")
+            logger.debug("CBE API — {} : email={} tél={} web={}",
+                         name[:40],
+                         cbe_contacts.get("email") or "—",
+                         cbe_contacts.get("phone") or "—",
+                         cbe_contacts.get("website") or "—")
+
+    if not cbe_contacts:
+        dossier["bloc_identite"].update({
+            "email_bce": "", "phone_bce": "", "website_bce": "",
+            "start_date_bce": "", "juridical_situation": "",
+        })
+
+    # ── 1. URL du site web ────────────────────────────────────
+    # Priorité : CBE API > rien (la recherche DDG se fait dans le pool)
+    website_url: str = (cbe_contacts or {}).get("website", "")
+
+    # ── 2. Recherches web (seulement si un mode web est activé) ─
+    website_data: dict = {}
+    news_snippets: list[str]      = []
+    job_snippets: list[str]       = []
+    manager_snippets: list[str]   = []
+    linkedin_snippets: list[str]  = []
+    financial_snippets: list[str] = []
+
+    need_web = (
+        config.use_web_scraping
+        or config.use_ddg_news
+        or config.use_ddg_jobs
+        or config.use_ddg_managers
+        or config.use_linkedin
+        or config.use_financial
+    )
+
+    if need_web:
+        # Trouver l'URL si pas fournie par CBE (obligatoire pour le scraping)
+        if config.use_web_scraping and not website_url:
+            website_url = _find_website(name, city)
+
+        # Lancer les recherches DDG + scraping en parallèle
+        tasks: dict = {}
+        with ThreadPoolExecutor(max_workers=5) as executor:
+            scrape_fut = None
+            if config.use_web_scraping and website_url:
+                scrape_fut = executor.submit(_deep_scrape_website, website_url)
+            if config.use_ddg_news:
+                tasks[executor.submit(_search_news, name, city)] = "news"
+            if config.use_ddg_jobs:
+                tasks[executor.submit(_search_jobs, name, city)] = "jobs"
+            if config.use_ddg_managers:
+                tasks[executor.submit(_search_managers, name, city)] = "managers"
+            if config.use_linkedin:
+                tasks[executor.submit(_search_linkedin_managers, name, city)] = "linkedin"
+            if config.use_financial:
+                tasks[executor.submit(_search_financial, name, city)] = "financial"
+
+            for fut in as_completed(tasks):
+                key = tasks[fut]
+                try:
+                    res = fut.result()
+                except Exception:
+                    res = []
+                if key == "news":
+                    news_snippets = res
+                elif key == "jobs":
+                    job_snippets = res
+                elif key == "managers":
+                    manager_snippets = res
+                elif key == "linkedin":
+                    linkedin_snippets = res
+                elif key == "financial":
+                    financial_snippets = res
+
+            if scrape_fut:
+                try:
+                    website_data = scrape_fut.result() or {}
+                    if website_data.get("text"):
+                        dossier["sources_used"].append(f"site:{website_url}")
+                except Exception:
+                    website_data = {}
+
     dossier["website_url"] = website_url
     dossier["bloc_identite"]["website_url"] = website_url
 
-    # ── 2. Scraping complet du site web ──────────────────────
-    website_data = {}
-    if website_url:
-        website_data = _deep_scrape_website(website_url)
-        if website_data.get("text"):
-            dossier["sources_used"].append(f"site:{website_url}")
+    # Fusionner manager web + LinkedIn (dédoublonnage)
+    all_manager_snippets = list(dict.fromkeys(manager_snippets + linkedin_snippets))[:8]
 
-    # ── 3. Recherches DDG ciblées ────────────────────────────
-    time.sleep(0.5)
-    news_snippets = _search_news(name, city)
-
-    time.sleep(0.5)
-    job_snippets = _search_jobs(name, city)
-
-    time.sleep(0.5)
-    manager_snippets = _search_managers(name, city)
-
-    # ── 4. Texte agrégé pour le LLM ──────────────────────────
+    # ── 3. Texte agrégé pour le LLM ──────────────────────────
     context = _build_llm_context(
-        website_data, news_snippets, job_snippets, manager_snippets
+        website_data, news_snippets, job_snippets,
+        all_manager_snippets, financial_snippets, cbe_contacts,
     )
 
     # ── 5. Analyse LLM ───────────────────────────────────────
     llm = _llm_analyze(company, profile, context)
 
     # ── 6. Assembler le dossier ──────────────────────────────
+    # Coordonnées : priorité CBE API (officiel) > scraping site web
+    email_final = (cbe_contacts or {}).get("email") or website_data.get("email", "")
+    phone_final = (cbe_contacts or {}).get("phone") or website_data.get("telephone", "")
+
     dossier["bloc_identite"].update({
         "description_ia":  llm.get("description", ""),
         "clients_types":   llm.get("clients_types", ""),
         "marches":         llm.get("marches", ""),
-        "email_general":   website_data.get("email", ""),
-        "telephone":       website_data.get("telephone", ""),
+        "email_general":   email_final,
+        "telephone":       phone_final,
         "reseaux_sociaux": website_data.get("social_links", []),
     })
 
@@ -248,6 +408,22 @@ def _search_managers(name: str, city: str) -> list[str]:
     return [f"{r['title']} — {r['snippet']}" for r in results if r.get("snippet")][:6]
 
 
+def _search_linkedin_managers(name: str, city: str) -> list[str]:
+    """Cherche les profils LinkedIn des dirigeants de l'entreprise."""
+    results = _ddg_search(
+        f'site:linkedin.com/in "{name}" directeur OR CEO OR DRH OR founder OR manager OR responsable'
+    )
+    return [f"{r['title']} — {r['snippet']}" for r in results if r.get("snippet")][:5]
+
+
+def _search_financial(name: str, city: str) -> list[str]:
+    """Cherche les données financières publiées (NBB, presse économique)."""
+    results = _ddg_search(
+        f'"{name}" {city} chiffre affaires résultats bilan comptes annuels NBB croissance'
+    )
+    return [f"{r['title']} — {r['snippet']}" for r in results if r.get("snippet")][:5]
+
+
 # ============================================================
 # Scraping du site web
 # ============================================================
@@ -344,14 +520,26 @@ def _fetch_page_text(url: str) -> tuple[str, BeautifulSoup | None]:
         return "", None
 
 
+_SKIP_EMAIL_PREFIXES = frozenset({
+    "noreply", "no-reply", "donotreply", "do-not-reply",
+    "webmaster", "postmaster", "mailer-daemon", "bounce",
+    "newsletter", "unsubscribe",
+})
+
+
 def _extract_contacts(soup: BeautifulSoup | None, result: dict) -> None:
     if not soup:
         return
     text = soup.get_text(" ")
-    # Email
-    m = re.search(r"[\w.+-]+@[\w.-]+\.[a-zA-Z]{2,}", text)
-    if m:
-        result["email"] = m.group(0)
+    # Emails : prendre le premier qui n'est pas une adresse technique
+    emails = re.findall(r"[\w.+-]+@[\w.-]+\.[a-zA-Z]{2,}", text)
+    for email in emails:
+        local = email.split("@")[0].lower().replace(".", "-")
+        if local not in _SKIP_EMAIL_PREFIXES:
+            result["email"] = email
+            break
+    if not result.get("email") and emails:
+        result["email"] = emails[0]  # fallback : premier email trouvé
     # Téléphone belge
     m = re.search(r"(?:\+32|0)[\s.-]?\d[\d\s.-]{6,12}", text)
     if m:
@@ -430,17 +618,40 @@ def _build_llm_context(
     website_data: dict,
     news_snippets: list[str],
     job_snippets:  list[str],
-    manager_snippets: list[str],
+    manager_snippets:  list[str],
+    financial_snippets: list[str] | None = None,
+    cbe_contacts: dict | None = None,
 ) -> str:
     parts = []
+
+    # Données officielles BCE (source la plus fiable)
+    if cbe_contacts:
+        cbe_lines = []
+        if cbe_contacts.get("email"):
+            cbe_lines.append(f"Email officiel : {cbe_contacts['email']}")
+        if cbe_contacts.get("phone"):
+            cbe_lines.append(f"Téléphone officiel : {cbe_contacts['phone']}")
+        if cbe_contacts.get("website"):
+            cbe_lines.append(f"Site web officiel : {cbe_contacts['website']}")
+        if cbe_contacts.get("start_date"):
+            cbe_lines.append(f"Date de création : {cbe_contacts['start_date']}")
+        if cbe_contacts.get("juridical_situation"):
+            cbe_lines.append(f"Situation juridique : {cbe_contacts['juridical_situation']}")
+        if cbe_contacts.get("nace_descriptions"):
+            nace_list = "\n".join(
+                f"  • {n}" for n in cbe_contacts["nace_descriptions"][:8]
+            )
+            cbe_lines.append(f"Activités NACE déclarées :\n{nace_list}")
+        if cbe_lines:
+            parts.append("=== DONNÉES OFFICIELLES BCE ===\n" + "\n".join(cbe_lines))
 
     if website_data.get("text"):
         parts.append(f"=== CONTENU SITE WEB ===\n{website_data['text'][:3000]}")
 
-    if website_data.get("email"):
-        parts.append(f"Email trouvé : {website_data['email']}")
-    if website_data.get("telephone"):
-        parts.append(f"Téléphone trouvé : {website_data['telephone']}")
+    if not (cbe_contacts or {}).get("email") and website_data.get("email"):
+        parts.append(f"Email trouvé (scraping) : {website_data['email']}")
+    if not (cbe_contacts or {}).get("phone") and website_data.get("telephone"):
+        parts.append(f"Téléphone trouvé (scraping) : {website_data['telephone']}")
     if website_data.get("references"):
         parts.append("Références/clients mentionnés :\n" + "\n".join(f"- {r}" for r in website_data["references"]))
     if website_data.get("certifications"):
@@ -449,11 +660,14 @@ def _build_llm_context(
     if news_snippets:
         parts.append("=== ACTUALITÉS / PRESSE ===\n" + "\n".join(f"- {s}" for s in news_snippets))
 
+    if financial_snippets:
+        parts.append("=== DONNÉES FINANCIÈRES ===\n" + "\n".join(f"- {s}" for s in financial_snippets))
+
     if job_snippets:
         parts.append("=== OFFRES D'EMPLOI DÉTECTÉES ===\n" + "\n".join(f"- {s}" for s in job_snippets))
 
     if manager_snippets:
-        parts.append("=== DIRIGEANTS / MANAGERS ===\n" + "\n".join(f"- {s}" for s in manager_snippets))
+        parts.append("=== DIRIGEANTS / MANAGERS (web + LinkedIn) ===\n" + "\n".join(f"- {s}" for s in manager_snippets))
 
     return "\n\n".join(parts) if parts else "Aucune information trouvée en ligne."
 

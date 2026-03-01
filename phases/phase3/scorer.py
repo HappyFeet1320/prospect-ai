@@ -31,42 +31,79 @@ WEIGHT_STRUCTURAL  = 0.30
 
 def score_sectoral(company: dict, profile: dict) -> tuple[float, str]:
     """
-    Compare le NACE cherché et les NACE du profil.
+    Compare les NACE de l'entreprise avec les codes du profil.
+
+    Prend en compte tous les codes NACE correspondants accumulés lors de la
+    Phase 2 (matched_nace_codes). Applique un bonus de +8 % par correspondance
+    supplémentaire (max +24 %) car une entreprise multi-NACE est une meilleure
+    opportunité.
 
     Retourne (score 0-1, explication).
     """
     profile_nace_codes: list[dict] = profile.get("nace_codes", [])
     profile_codes = {n["code"]: n.get("weight", 0.5) for n in profile_nace_codes}
 
-    nace_searched = company.get("nace_searched", "")
-    nace_main     = company.get("nace_main", "")
-    nace_list     = company.get("nace_list", [])  # liste éventuelle de NACE BCE
+    nace_searched      = company.get("nace_searched", "")
+    nace_main          = company.get("nace_main", "")
+    nace_list          = company.get("nace_list", [])
+    matched_nace_codes = company.get("matched_nace_codes", [])
 
-    # Priorité 1 — correspondance exacte sur le NACE utilisé pour la recherche
-    if nace_searched and nace_searched in profile_codes:
-        weight = profile_codes[nace_searched]
-        score = 0.6 + weight * 0.4           # 0.60 → 1.00 selon le poids
-        return round(min(score, 1.0), 3), f"NACE {nace_searched} exact (poids {int(weight*100)}%)"
+    # Ensemble de codes à évaluer : correspondances Phase 2 en priorité
+    direct_codes = matched_nace_codes if matched_nace_codes else (
+        [nace_searched] if nace_searched else []
+    )
 
-    # Priorité 2 — correspondance sur le NACE principal de l'entreprise
-    if nace_main and nace_main in profile_codes:
-        weight = profile_codes[nace_main]
-        score = 0.5 + weight * 0.3
-        return round(min(score, 1.0), 3), f"NACE principal {nace_main} dans profil (poids {int(weight*100)}%)"
+    base_score  = 0.0
+    base_reason = ""
 
-    # Priorité 3 — correspondance partielle (sous-branche = mêmes 3 premiers chiffres)
-    for pc in profile_codes:
-        for nc in [nace_searched, nace_main] + (nace_list or []):
-            if nc and pc[:3] == nc[:3] and pc != nc:
-                return 0.40, f"Sous-secteur proche ({nc} ~ {pc})"
+    # Priorité 1 — correspondance exacte (meilleur poids parmi tous les NACE correspondants)
+    for code in direct_codes:
+        if code in profile_codes:
+            weight    = profile_codes[code]
+            candidate = 0.6 + weight * 0.4   # 0.60 → 1.00
+            if candidate > base_score:
+                base_score  = candidate
+                base_reason = f"NACE {code} exact (poids {int(weight*100)}%)"
 
-    # Priorité 4 — secteur similaire (mêmes 2 premiers chiffres)
-    for pc in profile_codes:
-        for nc in [nace_searched, nace_main] + (nace_list or []):
-            if nc and pc[:2] == nc[:2]:
-                return 0.20, f"Secteur adjacent ({nc[:2]}xx)"
+    # Priorité 2 — NACE principal de l'entreprise
+    if base_score == 0.0 and nace_main and nace_main in profile_codes:
+        weight      = profile_codes[nace_main]
+        base_score  = 0.5 + weight * 0.3
+        base_reason = f"NACE principal {nace_main} dans profil (poids {int(weight*100)}%)"
 
-    return 0.0, "Aucune correspondance NACE"
+    # Priorité 3 — sous-branche (3 premiers chiffres identiques)
+    if base_score == 0.0:
+        for pc in profile_codes:
+            for nc in direct_codes + [nace_main] + (nace_list or []):
+                if nc and pc[:3] == nc[:3] and pc != nc:
+                    base_score  = 0.40
+                    base_reason = f"Sous-secteur proche ({nc} ~ {pc})"
+                    break
+            if base_score > 0:
+                break
+
+    # Priorité 4 — secteur adjacent (2 premiers chiffres identiques)
+    if base_score == 0.0:
+        for pc in profile_codes:
+            for nc in direct_codes + [nace_main] + (nace_list or []):
+                if nc and pc[:2] == nc[:2]:
+                    base_score  = 0.20
+                    base_reason = f"Secteur adjacent ({nc[:2]}xx)"
+                    break
+            if base_score > 0:
+                break
+
+    if base_score == 0.0:
+        return 0.0, "Aucune correspondance NACE"
+
+    # Bonus multi-NACE : +8 % par correspondance supplémentaire (max +24 %)
+    extra = max(0, len(matched_nace_codes) - 1)
+    if extra > 0:
+        bonus       = min(extra * 0.08, 0.24)
+        base_score  = min(base_score + bonus, 1.0)
+        base_reason += f" +{extra} NACE supp. (+{int(bonus*100)}%)"
+
+    return round(base_score, 3), base_reason
 
 
 # ============================================================

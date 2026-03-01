@@ -27,7 +27,7 @@ def render_phase5_page(session_id: str):
     """Rendu principal de la page Phase 5."""
     st.markdown("## Phase 5 — Préparation à l'Entretien")
     st.markdown(
-        "Génération d'un kit de préparation personnalisé pour chaque entreprise sélectionnée : "
+        "Génération d'un kit de préparation personnalisé pour chaque entreprise enrichie en Phase 4 : "
         "messages d'accroche, situations ambiguës, questions clés et résumé exécutif."
     )
 
@@ -75,23 +75,28 @@ def _render_config(session_id: str, profile: dict):
     has_any     = len(companies) > 0
     all_done    = has_any and len(without_kit) == 0
 
+    # ── Diagnostic LLM (toujours visible) ────────────────────
+    _render_llm_diagnostic()
+
+    st.markdown("---")
+
     # Info globale
     if has_any:
         st.info(
-            f"**{len(companies)} entreprise(s) éligible(s)** pour la génération de kit "
-            f"(notation ≥ 3 étoiles ou sélectionnées en Phase 4). "
+            f"**{len(companies)} entreprise(s) enrichie(s)** prêtes pour la génération de kit. "
             f"{len(with_kit)} kit(s) déjà généré(s)."
         )
         for c in companies:
             rating = c.get("operator_rating") or 0
             stars  = "⭐" * rating if rating else "—"
+            sel    = " ✅" if c.get("is_selected") else ""
             kit_ok = "✅ Kit prêt" if c.get("phase5_kit") else "⏳ À générer"
             nom    = c.get("denomination", c.get("bce_number", "?"))
-            st.markdown(f"- {nom} — {stars} — {kit_ok}")
+            st.markdown(f"- {nom} — {stars}{sel} — {kit_ok}")
     else:
         st.warning(
-            "Aucune entreprise éligible. "
-            "Retournez en Phase 4 pour noter au moins une entreprise avec ≥ 3 étoiles."
+            "Aucune entreprise enrichie trouvée. "
+            "Retournez en Phase 4 pour lancer l'enrichissement."
         )
 
     st.markdown("---")
@@ -133,12 +138,76 @@ def _render_config(session_id: str, profile: dict):
 
 
 # ============================================================
+# Diagnostic LLM
+# ============================================================
+
+def _render_llm_diagnostic():
+    """Affiche l'état du LLM et permet un test rapide."""
+    from config.settings import settings
+
+    provider = settings.LLM_PROVIDER
+    model    = settings.active_model
+    has_key  = settings.has_llm_key
+
+    col_st, col_btn = st.columns([3, 1])
+
+    with col_st:
+        if has_key:
+            st.success(f"LLM : **{provider.upper()}** — modèle `{model}` — clé configurée ✓")
+        else:
+            st.error(
+                f"LLM : **{provider.upper()}** — clé API manquante ! "
+                f"Ajoutez `{'GROQ_API_KEY' if provider == 'groq' else 'ANTHROPIC_API_KEY'}` dans `.env`."
+            )
+
+    with col_btn:
+        if st.button("Tester le LLM →", key="p5_test_llm", disabled=not has_key):
+            _run_llm_test()
+
+
+def _run_llm_test():
+    """Test minimal du LLM pour valider la connexion avant la génération."""
+    from utils.llm_client import call_with_json_tool
+
+    test_schema = {
+        "type": "object",
+        "properties": {
+            "message": {"type": "string", "description": "Un message de confirmation"}
+        },
+        "required": ["message"],
+    }
+    with st.spinner("Test LLM en cours…"):
+        try:
+            result, usage = call_with_json_tool(
+                system="Tu es un assistant de test.",
+                user="Réponds en JSON : confirme que tu fonctionnes.",
+                tool_name="test_connexion",
+                tool_description="Test de connexion LLM.",
+                tool_schema=test_schema,
+                max_tokens=100,
+            )
+            st.success(
+                f"LLM opérationnel — {usage.get('output_tokens', '?')} tokens "
+                f"({usage.get('provider')} / {usage.get('model', '?')[:30]})"
+            )
+        except Exception as e:
+            st.error(f"Erreur LLM : **{type(e).__name__}** — {e}")
+
+
+# ============================================================
 # Étape 2 — Génération avec progression
 # ============================================================
 
 def _render_generating(session_id: str, profile: dict):
     """Lance la génération et affiche la progression."""
+    from config.settings import settings
     st.markdown("### Génération des kits en cours...")
+    if settings.LLM_PROVIDER == "groq":
+        st.info(
+            "ℹ️ **Groq (tier gratuit)** — limite de 6 000 tokens/minute. "
+            "Une pause de 5 secondes est appliquée entre chaque kit. "
+            "En cas de rate limit, le système réessaie automatiquement (max 4 tentatives)."
+        )
 
     status_area  = st.empty()
     progress_bar = st.progress(0.0)
@@ -166,8 +235,28 @@ def _render_generating(session_id: str, profile: dict):
         result: Phase5Result = run_phase5(session_id, profile, progress_callback)
         progress_bar.progress(1.0)
 
+        # Afficher les erreurs individuelles
         for w in result.warnings:
             st.warning(w)
+
+        if result.generated_count == 0:
+            # Aucun kit généré → rester sur cette page
+            if result.total_companies == 0:
+                st.error(
+                    "Aucune entreprise enrichie trouvée. "
+                    "Retournez en Phase 4 et lancez l'enrichissement."
+                )
+            else:
+                st.error(
+                    f"Tous les kits ont échoué ({result.failed_count} erreur(s) sur "
+                    f"{result.total_companies} entreprise(s)). "
+                    "Vérifiez le LLM avec le bouton **Tester le LLM** ci-dessus, "
+                    "puis réessayez."
+                )
+            if st.button("← Retour config", key="p5_btn_retry_back"):
+                st.session_state.p5_step = "config"
+                st.rerun()
+            return
 
         st.success(
             f"Génération terminée — **{result.generated_count}/{result.total_companies}** kits créés."
@@ -177,8 +266,11 @@ def _render_generating(session_id: str, profile: dict):
         st.rerun()
 
     except Exception as e:
+        import traceback
         logger.error("Phase 5 — erreur génération : {}", e)
-        st.error(f"Erreur lors de la génération : {e}")
+        st.error(f"Erreur lors de la génération : **{type(e).__name__}** — {e}")
+        with st.expander("Détails techniques"):
+            st.code(traceback.format_exc())
         if st.button("Réessayer", key="p5_btn_retry"):
             st.rerun()
 

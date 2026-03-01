@@ -19,6 +19,7 @@ from ui.phase2_page import render_phase2_page
 from ui.phase3_page import render_phase3_page
 from ui.phase4_page import render_phase4_page
 from ui.phase5_page import render_phase5_page
+from ui.settings_page import render_settings_page
 
 
 # ============================================================
@@ -201,6 +202,18 @@ def render_sidebar():
                 st.session_state.current_page = "Phase 1 — Profiling"
                 st.rerun()
 
+        # Bouton Paramètres — toujours accessible
+        st.markdown("---")
+        is_settings = st.session_state.current_page == "Paramètres"
+        if st.button(
+            "⚙️ Paramètres",
+            key="nav_settings",
+            type="primary" if is_settings else "secondary",
+            use_container_width=True,
+        ):
+            st.session_state.current_page = "Paramètres"
+            st.rerun()
+
         # Pied de page
         st.markdown("---")
         st.caption(f"v{settings.APP_VERSION} | Belgique")
@@ -295,7 +308,9 @@ def main():
     current_page = st.session_state.get("current_page", "Accueil")
 
     # Routing
-    if current_page == "Accueil" or not session_id:
+    if current_page == "Paramètres":
+        render_settings_page()
+    elif current_page == "Accueil" or not session_id:
         render_home()
     elif current_page == "Phase 1 — Profiling":
         render_phase1_page(session_id)

@@ -435,6 +435,107 @@ def search_by_nace(
     return companies
 
 
+def search_by_nace_list(
+    nace_codes: list[str],
+    max_results: int = 2000,
+) -> list[dict]:
+    """
+    Recherche toutes les entreprises actives possédant AU MOINS UN des codes NACE listés.
+
+    Une seule requête SQL avec condition OR pour tous les codes → bien plus efficace
+    que N requêtes séparées. Chaque entreprise est retournée UNE SEULE FOIS avec la
+    liste complète de ses codes NACE correspondants parmi ceux recherchés.
+
+    Triée par nombre de codes NACE correspondants décroissant (meilleure opportunité
+    d'abord), puis par ancienneté.
+
+    Args:
+        nace_codes:   Liste de codes NACE 4 chiffres (ex: ["6201", "6202", "7010"]).
+        max_results:  Nombre max d'entreprises retournées.
+
+    Returns:
+        Liste de dicts entreprises, chacune avec :
+          - matched_nace_codes : list[str] — codes profil (4 chiffres) trouvés
+          - matched_nace_count : int       — nombre de codes correspondants
+    """
+    if not nace_codes:
+        return []
+    if not is_index_built():
+        raise RuntimeError("L'index KBO n'est pas encore construit. Lancez build_index() d'abord.")
+
+    con = sqlite3.connect(str(KBO_INDEX_PATH))
+    con.row_factory = sqlite3.Row
+
+    # Construire les conditions LIKE : "6201" → nace_code LIKE '6201%'
+    like_clauses = " OR ".join("n.nace_code LIKE ?" for _ in nace_codes)
+    like_params  = [code.strip() + "%" for code in nace_codes]
+
+    sql = f"""
+        SELECT
+            e.enterprise_number,
+            e.denomination,
+            e.juridical_form,
+            e.start_year,
+            e.zipcode,
+            e.municipality_fr,
+            e.street_fr,
+            e.house_number,
+            GROUP_CONCAT(DISTINCT n.nace_code) AS matched_kbo_codes_raw,
+            COUNT(DISTINCT n.nace_code)         AS kbo_match_count
+        FROM nace_activities n
+        JOIN enterprises e ON e.enterprise_number = n.enterprise_number
+        WHERE ({like_clauses})
+          AND e.denomination != ''
+        GROUP BY
+            e.enterprise_number, e.denomination, e.juridical_form, e.start_year,
+            e.zipcode, e.municipality_fr, e.street_fr, e.house_number
+        ORDER BY kbo_match_count DESC, e.start_year DESC NULLS LAST
+        LIMIT ?
+    """
+
+    params = like_params + [max_results]
+    rows   = con.execute(sql, params).fetchall()
+    con.close()
+
+    profile_codes_set = {code.strip() for code in nace_codes}
+
+    companies = []
+    for r in rows:
+        zipcode = r["zipcode"] or ""
+        city    = r["municipality_fr"] or ""
+        street  = r["street_fr"] or ""
+        house   = r["house_number"] or ""
+        addr    = f"{street} {house}, {zipcode} {city}".strip(", ")
+        province = _zipcode_to_province(zipcode)
+
+        # Mapper codes KBO (5 chiffres) → codes profil (4 chiffres)
+        kbo_raw   = r["matched_kbo_codes_raw"] or ""
+        kbo_codes = [c.strip() for c in kbo_raw.split(",") if c.strip()]
+        matched   = sorted({kc[:4] for kc in kbo_codes if kc[:4] in profile_codes_set})
+
+        companies.append({
+            "bce_number":         r["enterprise_number"],
+            "denomination":       r["denomination"] or f"Entreprise {r['enterprise_number']}",
+            "legal_form":         r["juridical_form"] or "",
+            "postal_code":        zipcode,
+            "city":               city,
+            "province":           province,
+            "address_raw":        addr,
+            "creation_year":      r["start_year"],
+            "nace_searched":      matched[0] if matched else "",
+            "matched_nace_codes": matched,
+            "matched_nace_count": len(matched),
+            "status":             "active",
+            "source":             "kbo_opendata",
+        })
+
+    logger.info(
+        "KBO batch — {} codes NACE → {} entreprises uniques",
+        len(nace_codes), len(companies),
+    )
+    return companies
+
+
 def get_index_stats() -> dict:
     """Retourne des statistiques sur l'index construit."""
     if not is_index_built():

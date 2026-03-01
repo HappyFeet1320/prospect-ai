@@ -45,6 +45,9 @@ class Settings:
     BCE_RATE_LIMIT_RPS: int = int(os.getenv("BCE_RATE_LIMIT_RPS", "10"))
     BCE_USE_MOCK: bool = os.getenv("BCE_USE_MOCK", "false").lower() == "true"
 
+    # API CBE (https://cbeapi.be) — clé gratuite, données fraîches + coordonnées
+    CBEAPI_KEY: str = os.getenv("CBEAPI_KEY", "")
+
     # API BNB
     BNB_API_KEY: str = os.getenv("BNB_API_KEY", "")
     BNB_API_BASE_URL: str = os.getenv("BNB_API_BASE_URL", "https://www.nbb.be/api/coa/v1")
@@ -82,6 +85,10 @@ class Settings:
         if self.LLM_PROVIDER == "groq":
             return bool(self.GROQ_API_KEY)
         return bool(self.ANTHROPIC_API_KEY and self.ANTHROPIC_API_KEY.startswith("sk-ant-"))
+
+    @property
+    def has_cbeapi_key(self) -> bool:
+        return bool(self.CBEAPI_KEY)
 
     @property
     def has_groq_key(self) -> bool:

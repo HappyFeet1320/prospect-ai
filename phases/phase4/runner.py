@@ -7,9 +7,6 @@ sauvegarde les dossiers en base et les décideurs dans la table decision_makers.
 
 from __future__ import annotations
 
-import threading
-import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 
 from loguru import logger
@@ -18,11 +15,7 @@ from sqlalchemy import select
 from database.connection import get_session
 from database.models import Company, DecisionMaker, Session as DbSession
 
-from .enricher import enrich_company
-
-
-# Lock global pour les écritures SQLite (non thread-safe nativement)
-_db_write_lock = threading.Lock()
+from .enricher import enrich_company, EnrichConfig
 
 
 # ============================================================
@@ -46,6 +39,7 @@ class Phase4Result:
 def run_phase4(
     session_id: str,
     profile: dict,
+    enrich_config: EnrichConfig | None = None,
     progress_callback=None,
 ) -> Phase4Result:
     """
@@ -54,12 +48,15 @@ def run_phase4(
     Args:
         session_id:        ID de session.
         profile:           Profil opérateur (Phase 1).
+        enrich_config:     Configuration des sources (défaut : EnrichConfig.standard()).
         progress_callback: fn(company_name, current, total, status)
                            status = 'running' | 'done' | 'error'
 
     Returns:
         Phase4Result avec la liste des dossiers enrichis.
     """
+    if enrich_config is None:
+        enrich_config = EnrichConfig.rapide()
     warnings: list[str] = []
 
     # ── Charger les entreprises sélectionnées ─────────────────
@@ -81,27 +78,16 @@ def run_phase4(
             warnings=["Aucune entreprise sélectionnée en Phase 3. Validez d'abord la Phase 3."],
         )
 
-    MAX_WORKERS = 3
-    logger.info(
-        "Phase 4 démarrée — {} entreprises à enrichir (parallèle ×{})",
-        total, MAX_WORKERS,
-    )
+    logger.info("Phase 4 démarrée — {} entreprises à enrichir (séquentiel)", total)
 
-    enriched:       list[dict] = []
-    failed          = 0
-    completed       = 0
-    warnings_lock   = threading.Lock()
-    progress_lock   = threading.Lock()
+    enriched:  list[dict] = []
+    failed     = 0
 
-    def _enrich_one(
-        idx: int, company_db: Company
-    ) -> tuple[bool, dict | None, str, str | None]:
-        """Worker : enrichit une entreprise dans son propre thread."""
-        # Décalage initial pour étaler les requêtes HTTP (0 s, 1 s, 2 s, 0 s, …)
-        stagger = (idx % MAX_WORKERS) * 1.0
-        if stagger:
-            time.sleep(stagger)
+    # ── Traitement séquentiel (stable avec Streamlit) ──────────
+    for idx, company_db in enumerate(companies_db):
+        completed = idx + 1
 
+        # Préparer les données depuis la DB
         company_data: dict = company_db.phase2_data
         company_data["company_id"]   = company_db.company_id
         company_data["bce_number"]   = company_db.bce_number or ""
@@ -109,46 +95,27 @@ def run_phase4(
 
         name = company_data.get("denomination", f"Entreprise {idx + 1}")
 
-        with progress_lock:
-            if progress_callback:
-                progress_callback(name, completed, total, "running")
+        if progress_callback:
+            progress_callback(name, idx, total, "running")
 
         try:
-            dossier = enrich_company(company_data, profile)
-
-            with _db_write_lock:
-                _save_dossier(company_db.company_id, dossier)
-
+            dossier = enrich_company(company_data, profile, config=enrich_config)
+            _save_dossier(company_db.company_id, dossier)
             company_data["phase4_dossier"] = dossier
-            return True, company_data, name, None
+            enriched.append(company_data)
+            logger.success("Phase 4 — {} enrichie ({}/{})", name[:40], completed, total)
+
+            if progress_callback:
+                progress_callback(name, completed, total, "done")
 
         except Exception as e:
-            logger.warning("Phase 4 — erreur enrichissement {} : {}", name[:40], e)
-            return False, None, name, str(e)
+            failed += 1
+            err_msg = f"Échec enrichissement de « {name[:60]} » : {e}"
+            warnings.append(err_msg)
+            logger.warning("Phase 4 — {}", err_msg)
 
-    # ── Lancement parallèle ────────────────────────────────────
-    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-        future_map = {
-            executor.submit(_enrich_one, idx, company_db): idx
-            for idx, company_db in enumerate(companies_db)
-        }
-
-        for future in as_completed(future_map):
-            success, company_data, name, err = future.result()
-            completed += 1
-
-            if success:
-                enriched.append(company_data)
-                if progress_callback:
-                    progress_callback(name, completed, total, "done")
-            else:
-                failed += 1
-                with warnings_lock:
-                    warnings.append(
-                        f"Échec enrichissement de « {name[:60]} » : {err}"
-                    )
-                if progress_callback:
-                    progress_callback(name, completed, total, "error")
+            if progress_callback:
+                progress_callback(name, completed, total, "error")
 
     if failed > 0:
         warnings.append(f"{failed} entreprise(s) n'ont pas pu être enrichies.")

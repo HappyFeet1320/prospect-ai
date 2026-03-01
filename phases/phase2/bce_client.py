@@ -14,7 +14,8 @@ from loguru import logger
 
 from .kbo_reader import (
     is_index_built,
-    search_by_nace as _kbo_search,
+    search_by_nace      as _kbo_search,
+    search_by_nace_list as _kbo_search_list,
     get_index_stats,
 )
 
@@ -71,6 +72,36 @@ def search_by_nace(
         progress_callback(len(companies), len(companies))
 
     logger.info("KBO NACE={} → {} entreprises trouvées", nace_code, len(companies))
+    return companies
+
+
+def search_by_nace_list(
+    nace_codes: list[str],
+    max_results: int = 2000,
+    progress_callback=None,
+) -> list[dict]:
+    """
+    Recherche batch : une seule requête pour tous les codes NACE.
+    Chaque entreprise est retournée une seule fois avec tous ses codes correspondants.
+
+    Args:
+        nace_codes:        Liste de codes NACE 4 chiffres.
+        max_results:       Nombre max d'entreprises.
+        progress_callback: fn(found, total) appelée après la recherche.
+    """
+    if not is_index_built():
+        raise RuntimeError(
+            "L'index KBO n'est pas construit. "
+            "Lancez la construction depuis la page Phase 2."
+        )
+
+    logger.info("KBO Open Data — recherche batch {} codes NACE", len(nace_codes))
+    companies = _kbo_search_list(nace_codes, max_results=max_results)
+
+    if progress_callback:
+        progress_callback(len(companies), len(companies))
+
+    logger.info("KBO batch → {} entreprises uniques trouvées", len(companies))
     return companies
 
 

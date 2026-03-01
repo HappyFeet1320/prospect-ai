@@ -12,6 +12,7 @@ from phases.phase4.runner import (
     run_phase4, validate_phase4, load_phase4_results,
     update_company_selection,
 )
+from phases.phase4.enricher import EnrichConfig
 
 
 # ============================================================
@@ -33,6 +34,8 @@ def render_phase4_page(session_id: str):
         st.session_state.p4_result = None
     if "p4_selected_idx" not in st.session_state:
         st.session_state.p4_selected_idx = 0
+    if "p4_enrich_mode" not in st.session_state:
+        st.session_state.p4_enrich_mode = "Rapide"
 
     step = st.session_state.p4_step
 
@@ -50,27 +53,125 @@ def render_phase4_page(session_id: str):
 # Étape 1 — Configuration
 # ============================================================
 
-def _render_config(session_id: str, profile: dict):
-    existing    = load_phase4_results(session_id)
-    has_existing = bool(existing)
+_MODE_LABELS = ["Rapide", "Standard (bêta)", "Complet (bêta)", "Web seulement (bêta)"]
+_MODE_DETAILS = {
+    "Rapide": {
+        "icon": "⚡",
+        "desc": "CBE API uniquement — coordonnées officielles (email, tél, site web)",
+        "time": "~2-5s / entreprise",
+        "sources": ["🏛 CBE API"],
+        "stable": True,
+    },
+    "Standard (bêta)": {
+        "icon": "⚖️",
+        "desc": "CBE API + scraping site web + DDG (actualités, emplois, dirigeants)",
+        "time": "~30-45s / entreprise",
+        "sources": ["🏛 CBE API", "🌐 Site web", "📰 Actualités", "💼 Emplois", "👤 Dirigeants"],
+        "stable": False,
+    },
+    "Complet (bêta)": {
+        "icon": "🔬",
+        "desc": "Tout activé — LinkedIn et données financières NBB en plus",
+        "time": "~60-90s / entreprise",
+        "sources": ["🏛 CBE API", "🌐 Site web", "📰 Actualités", "💼 Emplois",
+                    "👤 Dirigeants", "🔗 LinkedIn", "💰 Financier"],
+        "stable": False,
+    },
+    "Web seulement (bêta)": {
+        "icon": "🌐",
+        "desc": "Scraping + DDG sans CBE API — utile si clé non configurée",
+        "time": "~30-45s / entreprise",
+        "sources": ["🌐 Site web", "📰 Actualités", "💼 Emplois", "👤 Dirigeants"],
+        "stable": False,
+    },
+}
 
-    # Contenu informatif (non-widget, peut changer librement)
+
+def _mode_to_config(mode: str) -> EnrichConfig:
+    """Convertit le label de mode en EnrichConfig."""
+    if mode == "Rapide":
+        return EnrichConfig.rapide()
+    if mode.startswith("Complet"):
+        return EnrichConfig.complet()
+    if mode.startswith("Web seulement"):
+        return EnrichConfig.web_seulement()
+    if mode.startswith("Standard"):
+        return EnrichConfig.standard()
+    return EnrichConfig.rapide()  # défaut sécurisé
+
+
+def _render_config(session_id: str, profile: dict):
+    from config.settings import settings
+    existing     = load_phase4_results(session_id)
+    has_existing = bool(existing)
+    cbeapi_active = settings.has_cbeapi_key
+
     if has_existing:
         st.info(f"Dossiers Phase 4 existants : **{len(existing)}** entreprise(s).")
-    else:
+
+    # ── Tableau des blocs produits ────────────────────────────
+    if not has_existing:
         st.markdown("""
 L'agent va enrichir chaque entreprise sélectionnée (Phase 3) avec :
 
 | Bloc | Contenu |
 |------|---------|
-| **Identité** | Description IA, site web, contact, ancienneté |
+| **Identité** | Description IA, site web, email, téléphone, ancienneté |
 | **Financier** | Tendance, CA estimé, effectif, signal risque |
 | **Commercial** | Clients, partenaires, marchés, certifications |
 | **Décideurs** | CEO, DRH, responsables identifiés via web |
 | **Recrutement** | Offres actives, signaux croissance/difficulté |
-
-Comptez **30 à 60 secondes par entreprise** (recherche web + IA).
         """)
+
+    # ── Sélecteur de mode ─────────────────────────────────────
+    st.markdown("#### Mode d'enrichissement")
+
+    # Masquer "Web seulement" si CBE API est active (peu utile)
+    available_modes = _MODE_LABELS if not cbeapi_active else _MODE_LABELS[:-1]
+
+    current_mode = st.session_state.p4_enrich_mode
+    if current_mode not in available_modes:
+        current_mode = "Standard"
+
+    selected_mode = st.radio(
+        "Source des données",
+        options=available_modes,
+        index=available_modes.index(current_mode),
+        horizontal=True,
+        key="p4_mode_radio",
+        label_visibility="collapsed",
+    )
+    st.session_state.p4_enrich_mode = selected_mode
+
+    detail = _MODE_DETAILS.get(selected_mode, _MODE_DETAILS["Rapide"])
+    col_d, col_t = st.columns([3, 1])
+    with col_d:
+        st.markdown(f"{detail['icon']} {detail['desc']}")
+        st.caption("Sources : " + "  ·  ".join(detail["sources"]))
+    with col_t:
+        st.metric("Durée estimée", detail["time"])
+
+    # Alerte si mode bêta sélectionné
+    if not detail.get("stable", True):
+        st.warning(
+            "⚠️ **Module en développement** — Ce mode utilise la recherche web (DuckDuckGo + scraping). "
+            "Il peut être instable selon la disponibilité des sites. "
+            "Préférez le mode **Rapide** pour un enrichissement fiable."
+        )
+
+    # Alerte CBE API
+    cfg_preview = _mode_to_config(selected_mode)
+    if cfg_preview.use_cbe_api and not cbeapi_active:
+        st.warning(
+            "⚠️ CBE API sélectionnée mais `CBEAPI_KEY` absent du `.env`. "
+            "Les coordonnées officielles ne seront pas récupérées."
+        )
+    elif cbeapi_active and not cfg_preview.use_cbe_api:
+        st.info("ℹ️ CBE API disponible mais non utilisée dans ce mode.")
+    elif cbeapi_active and cfg_preview.use_cbe_api:
+        st.success("🏛 **CBE API activée** — coordonnées officielles incluses.")
+
+    st.markdown("")
 
     # ── 3 boutons TOUJOURS présents — structure DOM stable ───
     col1, col2, col3 = st.columns(3)
@@ -110,8 +211,12 @@ Comptez **30 à 60 secondes par entreprise** (recherche web + IA).
 # ============================================================
 
 def _render_enriching(session_id: str, profile: dict):
-    st.markdown("### Recherche approfondie en cours…")
-    st.caption("Analyse web + IA pour chaque entreprise. Veuillez patienter.")
+    mode          = st.session_state.get("p4_enrich_mode", "Standard")
+    enrich_config = _mode_to_config(mode)
+    detail        = _MODE_DETAILS.get(mode, _MODE_DETAILS["Rapide"])
+
+    st.markdown(f"### {detail['icon']} Enrichissement {mode} en cours…")
+    st.caption(f"{detail['desc']} — {detail['time']}. Veuillez patienter.")
 
     global_bar = st.progress(0.0, text="Initialisation…")
     log_area   = st.empty()
@@ -130,6 +235,7 @@ def _render_enriching(session_id: str, profile: dict):
         result: Phase4Result = run_phase4(
             session_id=session_id,
             profile=profile,
+            enrich_config=enrich_config,
             progress_callback=on_progress,
         )
         global_bar.progress(1.0, text="Recherche terminée !")
@@ -164,11 +270,12 @@ def _render_review(session_id: str):
 
     # ── Métriques ────────────────────────────────────────────
     selected_count = sum(1 for c in companies if c.get("is_selected", False))
+    enriched_count = len(companies)
     col1, col2, col3, col4 = st.columns(4)
-    col1.metric("Dossiers", len(companies))
-    col2.metric("Sélectionnés Phase 5", selected_count)
+    col1.metric("Dossiers enrichis", enriched_count)
+    col2.metric("Favoris sélectionnés", selected_count)
     col3.metric("Notés", sum(1 for c in companies if c.get("operator_rating")))
-    col4.metric("Prêt Phase 5", "✓" if selected_count >= 1 else "⚠️")
+    col4.metric("Prêt Phase 5", "✓" if enriched_count >= 1 else "⚠️")
 
     st.markdown("---")
 
@@ -213,9 +320,9 @@ def _render_review(session_id: str):
             "Valider → Phase 5",
             key="p4_review_validate",
             type="primary",
-            disabled=(selected_count < 1),
+            disabled=(enriched_count < 1),
             use_container_width=True,
-            help="Sélectionnez au moins 1 entreprise." if selected_count < 1 else "",
+            help="Enrichissez au moins 1 entreprise (Phase 4) pour continuer." if enriched_count < 1 else "",
         ):
             _validate(session_id)
 
@@ -320,21 +427,18 @@ def _section_identite(ident: dict, dossier: dict):
     with col1:
         st.markdown(f"**BCE** : {ident.get('bce_number','—')}")
         st.markdown(f"**Forme juridique** : {ident.get('legal_form','—')}")
-        st.markdown(f"**Création** : {ident.get('creation_year','—')}"
-                    + (f" ({ident.get('age_years')} ans)" if ident.get('age_years') else ""))
+        # Date précise si disponible via CBE API, sinon année KBO
+        start_date = ident.get("start_date_bce") or ident.get("creation_year") or "—"
+        age_suffix = f" ({ident['age_years']} ans)" if ident.get("age_years") else ""
+        st.markdown(f"**Création** : {start_date}{age_suffix}")
+        if ident.get("juridical_situation"):
+            st.markdown(f"**Situation** : {ident['juridical_situation']}")
     with col2:
         st.markdown(f"**Ville** : {ident.get('city','—')}")
         st.markdown(f"**Province** : {ident.get('province','—')}")
         st.markdown(f"**Code postal** : {ident.get('postal_code','—')}")
     with col3:
-        if ident.get("email_general"):
-            st.markdown(f"**Email** : {ident['email_general']}")
-        if ident.get("telephone"):
-            st.markdown(f"**Tél** : {ident['telephone']}")
-        if ident.get("reseaux_sociaux"):
-            socials = ident["reseaux_sociaux"]
-            links = " | ".join(f"[{_social_name(s)}]({s})" for s in socials[:4])
-            st.markdown(f"**Réseaux** : {links}")
+        _render_contacts(ident)
     if ident.get("address"):
         st.caption(f"Adresse : {ident['address']}")
 
@@ -473,6 +577,43 @@ def _section_recrutement(rec: dict):
 # Helpers
 # ============================================================
 
+def _render_contacts(ident: dict):
+    """Affiche les coordonnées de contact avec badge de source (BCE / scraping)."""
+    email_bce   = ident.get("email_bce", "")
+    phone_bce   = ident.get("phone_bce", "")
+    website_bce = ident.get("website_bce", "")
+    email_gen   = ident.get("email_general", "")
+    telephone   = ident.get("telephone", "")
+    website_url = ident.get("website_url", "")
+
+    # Email
+    if email_bce:
+        st.markdown(f"**Email** : {email_bce} `🏛 BCE`")
+    elif email_gen:
+        st.markdown(f"**Email** : {email_gen} `🔍 web`")
+
+    # Téléphone
+    if phone_bce:
+        st.markdown(f"**Tél** : {phone_bce} `🏛 BCE`")
+    elif telephone:
+        st.markdown(f"**Tél** : {telephone} `🔍 web`")
+
+    # Site web
+    if website_bce:
+        st.markdown(f"**Site** : [{website_bce}]({website_bce}) `🏛 BCE`")
+    elif website_url:
+        st.markdown(f"**Site** : [{website_url}]({website_url}) `🔍 web`")
+
+    if not any([email_bce, email_gen, phone_bce, telephone, website_bce, website_url]):
+        st.caption("Aucun contact disponible")
+
+    # Réseaux sociaux
+    if ident.get("reseaux_sociaux"):
+        socials = ident["reseaux_sociaux"]
+        links = " | ".join(f"[{_social_name(s)}]({s})" for s in socials[:4])
+        st.markdown(f"**Réseaux** : {links}")
+
+
 def _social_name(url: str) -> str:
     if "linkedin" in url:
         return "LinkedIn"
@@ -513,17 +654,18 @@ def _render_validated(session_id: str):
     st.success("**Phase 4 validée !**")
     col1, col2, col3 = st.columns(3)
     col1.metric("Dossiers constitués", len(companies))
-    col2.metric("Sélectionnés Phase 5", len(selected))
+    col2.metric("Favoris sélectionnés", len(selected))
     col3.metric("Prochaine étape", "Phase 5 — Kit entretien")
 
-    if selected:
+    if companies:
         st.markdown("---")
-        st.markdown("**Entreprises retenues pour Phase 5 :**")
-        for c in selected:
-            r = c.get("operator_rating", 0) or 0
+        st.markdown("**Entreprises prêtes pour Phase 5 (kits générés pour toutes) :**")
+        for c in companies:
+            r   = c.get("operator_rating", 0) or 0
+            sel = " ✅" if c.get("is_selected") else ""
             st.markdown(
                 f"- **{c.get('denomination','—')}** ({c.get('city','—')}) "
-                f"— {'★'*r}{'☆'*(5-r)} — {int(c.get('phase3_score',0)*100)}%"
+                f"— {'★'*r if r else '—'} — {int(c.get('phase3_score',0)*100)}%{sel}"
             )
 
     st.markdown("---")
