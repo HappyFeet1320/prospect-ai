@@ -52,6 +52,7 @@ prospect-ai/
 └── data/                     # Base SQLite (générée au lancement)
 ```
 
+
 ## Phases
 
 | Phase | Nom | Statut |
@@ -67,3 +68,6 @@ prospect-ai/
 - **Claude (Anthropic)** — Analyse profil, génération NACE, scoring IA
 - **BCE/KBO** — Registre officiel des entreprises belges (public)
 - **BNB** — Banque Nationale de Belgique (comptes annuels)
+
+**commande demarage**
+python -m streamlit run app.py
